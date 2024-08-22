@@ -15,23 +15,46 @@ import re
 
 
 # %% functions
+def clean_label(label):
+    # Remove 'm/z ' from the beginning if it exists
+    if label.startswith('m/z '):
+        label = label[len('m/z '):]
+    
+    # Remove ' []' from the end if it exists
+    if label.endswith(' []'):
+        label = label[:-len(' []')]
+    
+    return label
+
 # Function to extract chemica formula and reduce by one H and add _ppbV at the end
 def modify_formula(desc):
-    # Extract the part after '['
-    if '[' in desc:
-        formula_part = desc.split('[')[-1]
+    mass_hydron = 1.00728
+    # check if formula was assigned
+    # no formula assigned will ahve only []
+    if '[]' in desc:
+        #filter mass from string
+        mass_part = desc
+        mass_part = clean_label(mass_part)
+        modified_formula = float(mass_part)
+        #substract mass of hydron asumming pure ionization by H+
+        modified_formula = modified_formula - mass_hydron
+        modified_formula = round(modified_formula,5)
+        modified_formula = str(modified_formula)
+        
+    # otherwise a formula is assigned    
     else:
-        formula_part = desc
+        # Extract the part after '['
+        formula_part = desc.split('[')[-1]
 
-    # Extract elements and numbers using regex
-    elements_counts = re.findall(r'([A-Za-z]+)(\d*)', formula_part)
-
-    modified_formula = ""
-    for element, count in elements_counts:
-        if element == 'H' and count:
-            # Decrease hydrogen count by 1
-            count = str(int(count) - 1) if int(count) > 1 else ""
-        modified_formula += f"{element}{count}"
+        # Extract elements and numbers using regex
+        elements_counts = re.findall(r'([A-Za-z]+)(\d*)', formula_part)
+    
+        modified_formula = ""
+        for element, count in elements_counts:
+            if element == 'H' and count:
+                # Decrease hydrogen count by 1
+                count = str(int(count) - 1) if int(count) > 1 else ""
+            modified_formula += f"{element}{count}"
 
     modified_formula += '_ppbV'
     return modified_formula
@@ -39,7 +62,7 @@ def modify_formula(desc):
 
 # %% inputs
 # set file name and path of file
-file_name = 'IDA_Export_test.h5'
+file_name = '2024_CHANEL_07_01_LIM_day_export.h5'
 file_path = 'C://Users/m.roska/OneDrive - Forschungszentrum Jülich GmbH/Desktop/'
 
 # %% load
@@ -61,10 +84,36 @@ with h5py.File(os.path.join(file_path + file_name), 'r') as current_file:
     # reduce to pure chemical formula and reduce H count by one. add _ppbV at end of string
     formulas = [modify_formula(desc) for desc in formulas]
 
+
+
 # %% concat
 # Create a DataFrame
 # time as index, formulas as labels and peak data as column data
 df = pd.DataFrame(data=peak_data, index=buf_times, columns=formulas)
+
+# %% filter
+# get a 1 min averaged standard deviation
+# Resample the DataFrame to one-minute intervals and calculate the standard deviation
+std_per_minute = df.resample('T').std()
+# Calculate the average of these standard deviations for each column
+average_std = std_per_minute.mean()
+
+# Create DataFrame with column statistics
+stats = {
+    'min': df.min(),
+    'max': df.max(),
+    'average': df.mean(),
+    'average_std': average_std
+}
+df_stats = pd.DataFrame(stats)
+
+# drop TS with max bellow min ppb and snr bellow min snr
+min_ppb = 0.01
+min_snr = 3
+columns_to_drop = df_stats[(df_stats['max'] < min_ppb) | (min_snr * df_stats['average_std'] > df_stats['max'])].index
+# Drop the identified columns from df
+df_cleaned = df.drop(columns=columns_to_drop)
+
 
 # %% export
 # Change the file extension to .csv
